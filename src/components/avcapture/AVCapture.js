@@ -1,5 +1,5 @@
 import React, { Component } from 'react';
-import { AppBar, Box, Button, Container, Grid, TextField, Toolbar, Typography } from '@material-ui/core';
+import { AppBar, Box, Button, Container, Grid, Toolbar, Typography } from '@material-ui/core';
 import AdjustRoundedIcon from '@material-ui/icons/AdjustRounded';
 import { fetchPermissions, getSupportedMimeType } from './utils';
 import './AVCapture.scss';
@@ -10,6 +10,8 @@ class AVCapture extends Component {
     super(props);
 
     this.videoElemRef = React.createRef();
+    this.downloadAnchorRef = React.createRef();
+    this.mediaRecorder = null;
 
     this.state = {
       constraints: {
@@ -17,7 +19,8 @@ class AVCapture extends Component {
           echoCancellation: { exact: true }
         },
         video: {
-          width: 200, height: 200
+          width: window.screen.width,
+          height: window.screen.height
         }
       },
       cameraPermission: '',
@@ -26,9 +29,8 @@ class AVCapture extends Component {
       askForPermissions: true,
       permissionsDenied: false,
       recording: false,
-      mediaRecorder: null,
-      audioTranscript: '',
-      videoContent: []
+      videoContent: [],
+      supportedMimetype: ''
     };
   }
 
@@ -104,7 +106,6 @@ class AVCapture extends Component {
   fetchFeedFromCamera = () => {
     try {
       if (!this.state.askForPermissions) {
-        debugger;
         navigator.mediaDevices.getUserMedia(this.state.constraints)
           .then((stream) => {
             this.handleVideoStream(stream);
@@ -129,6 +130,8 @@ class AVCapture extends Component {
       return;
     }
 
+    this.setState(() => { return { supportedMimetype: supportedMimetype } });
+
     try {
       var options = {
         audioBitsPerSecond: 128000,
@@ -136,17 +139,28 @@ class AVCapture extends Component {
         mimeType: supportedMimetype
       }
 
-      const mediaRecorder = new MediaRecorder(stream, options);
+      this.mediaRecorder = new MediaRecorder(stream, options);
 
-      this.setState(() => { return { mediaRecorder: mediaRecorder } });
-
-      mediaRecorder.onstop = (event) => {
+      this.mediaRecorder.onstop = (event) => {
         console.log('Recorder stopped: ', event);
+        setTimeout(() => {
+          stream.getTracks().forEach(track => track.stop());
+          this.downloadVideoRecording();
+        }, 1000);
       };
-      mediaRecorder.ondataavailable = this.handleDataAvailable;
-      mediaRecorder.start();
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          let recordedVideoContent = this.state.videoContent;
+          recordedVideoContent.push(event.data);
+          this.setState(() => { return { videoContent: recordedVideoContent } });
+        }
+      };
+
+      this.mediaRecorder.start();
 
       this.videoElemRef.current.srcObject = stream;
+
     } catch (error) {
       console.error(error);
       alert('Error occured' + error.message);
@@ -154,24 +168,24 @@ class AVCapture extends Component {
 
   }
 
-  handleDataAvailable = (event) => {
-    if (event.data && event.data.size > 0) {
-      let recordedVideoContent = this.state.videoContent;
-      recordedVideoContent.push(event.data);
-      this.setState(() => { return { videoContent: recordedVideoContent } });
-    }
-  }
-
   stopRecording = () => {
-    if (this.state.mediaRecorder) {
-      this.state.mediaRecorder.stop();
+    if (this.mediaRecorder) {
+      this.mediaRecorder.stop();
       this.setState(() => { return { recording: false } });
-      this.downloadVideoRecording();
     }
   }
 
   downloadVideoRecording = () => {
-
+    const videoBlob = new Blob(this.state.videoContent, { type: this.state.supportedMimetype });
+    const url = window.URL.createObjectURL(videoBlob);
+    // window.open(url, '_blank');
+    const anchorElem = this.downloadAnchorRef.current;
+    anchorElem.href = url;
+    anchorElem.download = window.performance.now().toString().replace(/\./g, '') + '.mp4';
+    anchorElem.click();
+    setTimeout(() => {
+      window.URL.revokeObjectURL(url);
+    }, 100);
   }
 
   render() {
@@ -223,32 +237,16 @@ class AVCapture extends Component {
                     </Button>
                     <AdjustRoundedIcon className="blink" />
                   </Grid>
-                  <Grid item xs={4}>
+                  <Grid item xs={6} className="text-center">
                     <Typography variant="h6" color="inherit" noWrap>
                       Video
                     </Typography>
                     <video className="mirror-video" ref={this.videoElemRef} playsInline autoPlay muted></video>
                   </Grid>
-                  <Grid item xs={4}>
-                    <Typography variant="h6" color="inherit" noWrap>
-                      Audio transcription
-                </Typography>
-                    <TextField
-                      id="standard-textarea"
-                      variant="outlined"
-                      multiline
-                      InputProps={{
-                        readOnly: true
-                      }}
-                      rows={30}
-                      fullWidth={true}
-                      value={this.state.audioTranscript}
-                    />
-                  </Grid>
                 </React.Fragment>
               }
-
             </Grid>
+            <a className="hide" href="google.com" ref={this.downloadAnchorRef}>download</a>
           </Box>
         </Container>
       </React.Fragment>
