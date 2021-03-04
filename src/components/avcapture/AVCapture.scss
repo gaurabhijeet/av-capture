@@ -1,12 +1,23 @@
-.text-center{
+.text-center {
     text-align: center !important;
 }
-.blink{
+
+.blink {
     animation: blinker 1s linear infinite;
+}
+
+.mirror-video {
+    -webkit-transform: scaleX(-1);
+    transform: scaleX(-1);
+}
+
+video {
+    width: 100%;
+    max-height: 100%;
 }
 
 @keyframes blinker {
     50% {
-      opacity: 0;
+        opacity: 0;
     }
 }

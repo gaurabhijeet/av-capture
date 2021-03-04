@@ -1,7 +1,7 @@
 import React, { Component } from 'react';
 import { AppBar, Box, Button, Container, Grid, TextField, Toolbar, Typography } from '@material-ui/core';
 import AdjustRoundedIcon from '@material-ui/icons/AdjustRounded';
-import { fetchPermissions } from './utils';
+import { fetchPermissions, getSupportedMimeType } from './utils';
 import './AVCapture.scss';
 
 class AVCapture extends Component {
@@ -10,13 +10,14 @@ class AVCapture extends Component {
     super(props);
 
     this.videoElemRef = React.createRef();
+
     this.state = {
       constraints: {
         audio: {
           echoCancellation: { exact: true }
         },
         video: {
-          width: 1280, height: 720
+          width: 200, height: 200
         }
       },
       cameraPermission: '',
@@ -103,6 +104,7 @@ class AVCapture extends Component {
   fetchFeedFromCamera = () => {
     try {
       if (!this.state.askForPermissions) {
+        debugger;
         navigator.mediaDevices.getUserMedia(this.state.constraints)
           .then((stream) => {
             this.handleVideoStream(stream);
@@ -120,12 +122,20 @@ class AVCapture extends Component {
   }
 
   handleVideoStream = (stream) => {
-    var options = {
-      audioBitsPerSecond: 128000,
-      videoBitsPerSecond: 2500000,
-      mimeType: 'video/webm;codecs=vp9'
+    const supportedMimetype = getSupportedMimeType();
+
+    if (!supportedMimetype) {
+      alert('No supported video type available.')
+      return;
     }
+
     try {
+      var options = {
+        audioBitsPerSecond: 128000,
+        videoBitsPerSecond: 2500000,
+        mimeType: supportedMimetype
+      }
+
       const mediaRecorder = new MediaRecorder(stream, options);
 
       this.setState(() => { return { mediaRecorder: mediaRecorder } });
@@ -135,7 +145,7 @@ class AVCapture extends Component {
       };
       mediaRecorder.ondataavailable = this.handleDataAvailable;
       mediaRecorder.start();
-      
+
       this.videoElemRef.current.srcObject = stream;
     } catch (error) {
       console.error(error);
@@ -217,7 +227,7 @@ class AVCapture extends Component {
                     <Typography variant="h6" color="inherit" noWrap>
                       Video
                     </Typography>
-                    <video ref={this.videoElemRef} playsinline autoplay muted></video>
+                    <video className="mirror-video" ref={this.videoElemRef} playsInline autoPlay muted></video>
                   </Grid>
                   <Grid item xs={4}>
                     <Typography variant="h6" color="inherit" noWrap>
