@@ -1,7 +1,9 @@
 import React, { Component } from 'react';
-import { AppBar, Box, Button, Container, Grid, Toolbar, Typography } from '@material-ui/core';
+import { AppBar, Box, Button, Container, Grid, TextField, Toolbar, Typography } from '@material-ui/core';
 import AdjustRoundedIcon from '@material-ui/icons/AdjustRounded';
-import { fetchPermissions, getSupportedMimeType } from './utils';
+import { fetchPermissions, getSupportedMimeType } from './utils/browser';
+import * as tf from "@tensorflow/tfjs";
+import * as blazeface from "@tensorflow-models/blazeface";
 import './AVCapture.scss';
 
 class AVCapture extends Component {
@@ -10,8 +12,11 @@ class AVCapture extends Component {
     super(props);
 
     this.videoElemRef = React.createRef();
-    this.downloadAnchorRef = React.createRef();
+    this.downloadVideoAnchorRef = React.createRef();
+    this.downloadAudioAnchorRef = React.createRef();
+    this.canvasRef = React.createRef();
     this.mediaRecorder = null;
+    this.speechRecognition = null;
 
     this.state = {
       constraints: {
@@ -19,8 +24,8 @@ class AVCapture extends Component {
           echoCancellation: { exact: true }
         },
         video: {
-          width: window.screen.width,
-          height: window.screen.height
+          //width: window.screen.width,
+          // height: window.screen.height
         }
       },
       cameraPermission: '',
@@ -30,7 +35,9 @@ class AVCapture extends Component {
       permissionsDenied: false,
       recording: false,
       videoContent: [],
-      supportedMimetype: ''
+      supportedMimetype: '',
+      audioTranscript: '',
+      lastTranscript: ''
     };
   }
 
@@ -39,9 +46,64 @@ class AVCapture extends Component {
   }
 
   startRecording = () => {
-    this.setState(() => { return { recording: true } });
+    this.setState(() => { return { recording: true, audioTranscript: '' } });
     this.fetchFeedFromCamera();
+    this.startAudioTranscription();
+    this.loadTfBlazeFace();
   }
+
+  loadTfBlazeFace = async () => {
+    const tfBlazeFaceModel = await blazeface.load();
+    setInterval(() => {
+      this.detectFace(tfBlazeFaceModel);
+    }, 1000);
+  }
+
+  detectFace = async (tfBlazeFaceModel) => {
+    if (typeof this.videoElemRef.current !== "undefined" &&
+      this.videoElemRef.current !== null &&
+      this.videoElemRef.current.readyState === 4) {
+
+      const videoWidth = this.videoElemRef.current.videoWidth;
+      const videoHeight = this.videoElemRef.current.videoHeight;
+
+      this.videoElemRef.current.width = videoWidth;
+      this.videoElemRef.current.height = videoHeight;
+
+      this.canvasRef.current.width = videoWidth;
+      this.canvasRef.current.height = videoHeight;
+
+      const predictions = await tfBlazeFaceModel.estimateFaces(this.videoElemRef.current, false);
+      this.drawPolygon(predictions);
+
+    }
+  };
+
+  drawPolygon = (tfBlazeFacePredictions) => {
+
+    if (tfBlazeFacePredictions.length > 0 && this.canvasRef && this.canvasRef.current) {
+      const ctx = this.canvasRef.current.getContext("2d");
+
+      for (let i = 0; i < tfBlazeFacePredictions.length; i++) {
+        const start = tfBlazeFacePredictions[i].topLeft;
+        const end = tfBlazeFacePredictions[i].bottomRight;
+
+        var probability = tfBlazeFacePredictions[i].probability;
+        const size = [end[0] - start[0], end[1] - start[1]];
+
+        ctx.beginPath();
+        ctx.strokeStyle = "green";
+        ctx.lineWidth = "4";
+        ctx.rect(start[0], start[1], size[0], size[1]);
+        ctx.stroke();
+        var prob = (probability[0] * 100).toPrecision(5).toString();
+        var text = prob + "%";
+        ctx.fillStyle = "red";
+        ctx.font = "13pt sans-serif";
+        ctx.fillText(text, start[0] + 5, start[1] + 20);
+      }
+    }
+  };
 
   checkForPermissions = (addEventListener) => {
     const microphoneGrantPromise = fetchPermissions('microphone');
@@ -146,6 +208,7 @@ class AVCapture extends Component {
         setTimeout(() => {
           stream.getTracks().forEach(track => track.stop());
           this.downloadVideoRecording();
+          this.downloadAudioTranscript();
         }, 1000);
       };
 
@@ -169,8 +232,9 @@ class AVCapture extends Component {
   }
 
   stopRecording = () => {
-    if (this.mediaRecorder) {
+    if (this.mediaRecorder && this.speechRecognition) {
       this.mediaRecorder.stop();
+      this.speechRecognition.stop();
       this.setState(() => { return { recording: false } });
     }
   }
@@ -178,10 +242,58 @@ class AVCapture extends Component {
   downloadVideoRecording = () => {
     const videoBlob = new Blob(this.state.videoContent, { type: this.state.supportedMimetype });
     const url = window.URL.createObjectURL(videoBlob);
-    // window.open(url, '_blank');
-    const anchorElem = this.downloadAnchorRef.current;
+
+    const anchorElem = this.downloadVideoAnchorRef.current;
     anchorElem.href = url;
     anchorElem.download = window.performance.now().toString().replace(/\./g, '') + '.mp4';
+    anchorElem.click();
+    setTimeout(() => {
+      window.URL.revokeObjectURL(url);
+    }, 100);
+  }
+
+  startAudioTranscription = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    this.speechRecognition = new SpeechRecognition();
+    this.speechRecognition.continuous = true;
+    this.speechRecognition.interimResults = true;
+
+    this.speechRecognition.onstart = () => {
+      console.log('web speech api started');
+    };
+
+    this.speechRecognition.onerror = (event) => {
+      console.log('web speech api errored out');
+      console.log(event);
+    };
+
+    this.speechRecognition.onspeechend = () => {
+      console.log('web speech api stopped');
+
+      if (this.state.recording) {
+        this.startAudioTranscription();
+      }
+    };
+
+    this.speechRecognition.onresult = (event) => {
+      const interimTranscript = event.results[0][0].transcript;
+      if (interimTranscript !== this.state.lastTranscript) {
+        let audioTranscript = this.state.audioTranscript;
+        audioTranscript += interimTranscript;
+        this.setState(() => { return { audioTranscript: audioTranscript, lastTranscript: interimTranscript } });
+      }
+    };
+
+    this.speechRecognition.start();
+  }
+
+  downloadAudioTranscript = () => {
+    const audioTranscriptBlob = new Blob([this.state.audioTranscript], { type: "text/plain;charset=utf-8" });
+    const url = window.URL.createObjectURL(audioTranscriptBlob);
+
+    const anchorElem = this.downloadAudioAnchorRef.current;
+    anchorElem.href = url;
+    anchorElem.download = window.performance.now().toString().replace(/\./g, '') + '.txt';
     anchorElem.click();
     setTimeout(() => {
       window.URL.revokeObjectURL(url);
@@ -238,15 +350,32 @@ class AVCapture extends Component {
                     <AdjustRoundedIcon className="blink" />
                   </Grid>
                   <Grid item xs={6} className="text-center">
+                    <div id="av-components">
+                      <video id="av-video" className="mirror" ref={this.videoElemRef} playsInline autoPlay muted></video>
+                      <canvas id="av-canvas" className="mirror" ref={this.canvasRef}></canvas>
+                    </div>
+                  </Grid>
+                  <Grid item xs={4}>
                     <Typography variant="h6" color="inherit" noWrap>
-                      Video
+                      Audio transcription
                     </Typography>
-                    <video className="mirror-video" ref={this.videoElemRef} playsInline autoPlay muted></video>
+                    <TextField
+                      id="standard-textarea"
+                      variant="outlined"
+                      multiline
+                      InputProps={{
+                        readOnly: true
+                      }}
+                      rows={30}
+                      fullWidth={true}
+                      value={this.state.audioTranscript}
+                    />
                   </Grid>
                 </React.Fragment>
               }
             </Grid>
-            <a className="hide" href="google.com" ref={this.downloadAnchorRef}>download</a>
+            <a className="hide" href="google.com" ref={this.downloadVideoAnchorRef}>download</a>
+            <a className="hide" href="google.com" ref={this.downloadAudioAnchorRef}>download</a>
           </Box>
         </Container>
       </React.Fragment>
